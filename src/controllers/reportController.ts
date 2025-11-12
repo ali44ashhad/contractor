@@ -1,10 +1,22 @@
 import { Response } from 'express';
 import { Report, ReportType } from '../models/Report';
 import { Project } from '../models/Project';
-import { Document } from '../models/Document';
+import { DocumentType, Update } from '../models/Update';
 import { AuthRequest } from '../middleware/auth';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { UserRole } from '../models/User';
+
+const flattenUpdateDocuments = (updates: any[]) =>
+  updates.flatMap((updateDoc: any) =>
+    updateDoc.documents.map((doc: any) => {
+      const docObject = typeof doc?.toObject === 'function' ? doc.toObject() : doc;
+      return {
+        ...docObject,
+        projectId: updateDoc.projectId,
+        updateId: updateDoc._id
+      };
+    })
+  );
 
 /**
  * Get all reports (Accounts only)
@@ -79,8 +91,10 @@ export const generateReport = async (req: AuthRequest, res: Response): Promise<v
       .populate('adminId', 'name email')
       .populate('contractorId', 'name email role');
 
-    const documents = await Document.find({ projectId })
-      .populate('uploadedBy', 'name email role');
+    const updates = await Update.find({ projectId })
+      .populate('contractorId', 'name email role')
+      .populate('documents.uploadedBy', 'name email role');
+    const documents = flattenUpdateDocuments(updates);
 
     switch (type) {
       case ReportType.FINANCIAL:
@@ -90,7 +104,9 @@ export const generateReport = async (req: AuthRequest, res: Response): Promise<v
             name: project?.name,
             budget: project?.budget
           },
-          documents: documents.filter(doc => doc.type === 'requirement' || doc.type === 'other'),
+          documents: documents.filter(
+            doc => doc.type === DocumentType.REQUIREMENT || doc.type === DocumentType.OTHER
+          ),
           summary: {
             totalDocuments: documents.length,
             totalBudget: project?.budget || 0
@@ -105,9 +121,9 @@ export const generateReport = async (req: AuthRequest, res: Response): Promise<v
             name: project?.name,
             status: project?.status
           },
-          statusDocuments: documents.filter(doc => doc.type === 'status'),
+          statusDocuments: documents.filter(doc => doc.type === DocumentType.STATUS),
           summary: {
-            statusDocuments: documents.filter(doc => doc.type === 'status').length,
+            statusDocuments: documents.filter(doc => doc.type === DocumentType.STATUS).length,
             totalDocuments: documents.length
           }
         };
@@ -120,9 +136,9 @@ export const generateReport = async (req: AuthRequest, res: Response): Promise<v
           summary: {
             totalDocuments: documents.length,
             byType: {
-              requirement: documents.filter(doc => doc.type === 'requirement').length,
-              status: documents.filter(doc => doc.type === 'status').length,
-              other: documents.filter(doc => doc.type === 'other').length
+              requirement: documents.filter(doc => doc.type === DocumentType.REQUIREMENT).length,
+              status: documents.filter(doc => doc.type === DocumentType.STATUS).length,
+              other: documents.filter(doc => doc.type === DocumentType.OTHER).length
             }
           }
         };
@@ -140,8 +156,11 @@ export const generateReport = async (req: AuthRequest, res: Response): Promise<v
       .populate('adminId', 'name email')
       .populate('contractorId', 'name email role');
 
-    const allDocuments = await Document.find()
-      .populate('uploadedBy', 'name email role');
+    const updates = await Update.find()
+      .populate('projectId', 'name description')
+      .populate('contractorId', 'name email role')
+      .populate('documents.uploadedBy', 'name email role');
+    const allDocuments = flattenUpdateDocuments(updates);
 
     reportData = {
       totalProjects: projects.length,
@@ -157,9 +176,9 @@ export const generateReport = async (req: AuthRequest, res: Response): Promise<v
           cancelled: projects.filter(p => p.status === 'cancelled').length
         },
         documentsByType: {
-          requirement: allDocuments.filter(doc => doc.type === 'requirement').length,
-          status: allDocuments.filter(doc => doc.type === 'status').length,
-          other: allDocuments.filter(doc => doc.type === 'other').length
+          requirement: allDocuments.filter(doc => doc.type === DocumentType.REQUIREMENT).length,
+          status: allDocuments.filter(doc => doc.type === DocumentType.STATUS).length,
+          other: allDocuments.filter(doc => doc.type === DocumentType.OTHER).length
         }
       }
     };

@@ -1,4 +1,4 @@
-import jwt from 'jsonwebtoken';
+import jwt, { type SignOptions, type Secret } from 'jsonwebtoken';
 import { UserRole } from '../models/User';
 
 /**
@@ -16,16 +16,18 @@ export interface JWTPayload {
  * @returns JWT token string
  */
 export const generateToken = (payload: JWTPayload): string => {
-  const secret = process.env.JWT_SECRET;
+  const secret = process.env.JWT_SECRET as Secret | undefined;
   
   if (!secret) {
     throw new Error('JWT_SECRET is not defined in environment variables');
   }
 
-  return jwt.sign(payload, secret, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  const options: SignOptions = {
+    expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'],
     issuer: process.env.JWT_ISSUER || 'construction-api'
-  });
+  };
+
+  return jwt.sign(payload, secret, options);
 };
 
 /**
@@ -34,7 +36,7 @@ export const generateToken = (payload: JWTPayload): string => {
  * @returns Decoded token payload
  */
 export const verifyToken = (token: string): JWTPayload => {
-  const secret = process.env.JWT_SECRET;
+  const secret = process.env.JWT_SECRET as Secret | undefined;
   
   if (!secret) {
     throw new Error('JWT_SECRET is not defined in environment variables');
