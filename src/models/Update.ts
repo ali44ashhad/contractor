@@ -6,6 +6,14 @@ export enum DocumentType {
   OTHER = 'other'
 }
 
+/**
+ * Update type enum for morning/evening updates
+ */
+export enum UpdateType {
+  MORNING = 'morning',
+  EVENING = 'evening'
+}
+
 export interface IUpdateDocument extends Types.Subdocument {
   uploadedBy: Types.ObjectId;
   type: DocumentType;
@@ -14,6 +22,8 @@ export interface IUpdateDocument extends Types.Subdocument {
   fileSize?: number;
   mimeType?: string;
   description?: string;
+  latitude: number;
+  longitude: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -21,6 +31,8 @@ export interface IUpdateDocument extends Types.Subdocument {
 export interface IUpdate extends Document {
   projectId: mongoose.Types.ObjectId;
   contractorId: mongoose.Types.ObjectId;
+  postedBy: mongoose.Types.ObjectId; // User who posted the update (team member)
+  updateType: UpdateType; // MORNING or EVENING
   status: string;
   updateDate: Date;
   timestamp: Date;
@@ -62,6 +74,18 @@ const UpdateDocumentSchema = new Schema<IUpdateDocument>(
     description: {
       type: String,
       trim: true
+    },
+    latitude: {
+      type: Number,
+      required: [true, 'Latitude is required'],
+      min: [-90, 'Latitude must be between -90 and 90'],
+      max: [90, 'Latitude must be between -90 and 90']
+    },
+    longitude: {
+      type: Number,
+      required: [true, 'Longitude is required'],
+      min: [-180, 'Longitude must be between -180 and 180'],
+      max: [180, 'Longitude must be between -180 and 180']
     }
   },
   {
@@ -82,6 +106,16 @@ const UpdateSchema: Schema = new Schema(
       ref: 'User',
       required: [true, 'Contractor ID is required']
     },
+    postedBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'Posted by user ID is required']
+    },
+    updateType: {
+      type: String,
+      enum: Object.values(UpdateType),
+      required: [true, 'Update type (morning/evening) is required']
+    },
     status: {
       type: String,
       required: [true, 'Status is required'],
@@ -101,7 +135,13 @@ const UpdateSchema: Schema = new Schema(
     },
     documents: {
       type: [UpdateDocumentSchema],
-      default: []
+      default: [],
+      validate: {
+        validator: function (docs: any[]) {
+          return docs.length > 0;
+        },
+        message: 'At least one document/image is required for each update'
+      }
     }
   },
   {
@@ -113,6 +153,10 @@ const UpdateSchema: Schema = new Schema(
 UpdateSchema.index({ projectId: 1 });
 UpdateSchema.index({ contractorId: 1 });
 UpdateSchema.index({ projectId: 1, contractorId: 1 });
+UpdateSchema.index({ postedBy: 1 });
+UpdateSchema.index({ updateDate: 1 });
+UpdateSchema.index({ updateType: 1 });
+UpdateSchema.index({ postedBy: 1, projectId: 1, updateDate: 1, updateType: 1 }, { unique: true }); // Prevent duplicate morning/evening updates per user per day
 UpdateSchema.index({ 'documents.type': 1 });
 
 export const Update = mongoose.model<IUpdate>('Update', UpdateSchema);

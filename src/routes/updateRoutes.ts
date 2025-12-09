@@ -27,15 +27,15 @@ router.get('/:id', authenticate, asyncHandler(getUpdateById));
 
 /**
  * @route   POST /api/updates
- * @desc    Create an update (contractors only)
- * @access  Contractors
+ * @desc    Create an update (team members only)
+ * @access  Team members (contractors and team members)
  */
 router.post('/', authenticate, uploadDocuments, asyncHandler(createUpdate));
 
 /**
  * @route   POST /api/updates/:id/documents
- * @desc    Attach documents to an update (contractors only)
- * @access  Contractors
+ * @desc    Attach documents to an update (team members only)
+ * @access  Team members (can only modify their own updates)
  */
 router.post('/:id/documents', authenticate, uploadDocuments, asyncHandler(addDocumentsToUpdate));
 

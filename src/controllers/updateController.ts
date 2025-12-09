@@ -1,26 +1,46 @@
 import { Response } from 'express';
 import type { Express } from 'express';
 import { Types } from 'mongoose';
-import { DocumentType, Update } from '../models/Update';
-import { Project } from '../models/Project';
+import { DocumentType, Update, UpdateType } from '../models/Update';
+import { Project, ProjectStatus } from '../models/Project';
+import { Team } from '../models/Team';
+import { Attendance } from '../models/Attendance';
 import { AuthRequest } from '../middleware/auth';
 import { ForbiddenError, NotFoundError, ValidationError } from '../utils/errors';
 import { UserRole } from '../models/User';
 import { uploadBufferToCloudinary } from '../utils/cloudinary';
 
-const ensureContractorRole = (
-  req: AuthRequest
-): AuthRequest['user'] & { role: UserRole.CONTRACTOR } => {
-  const user = req.user;
-
-  if (!user || user.role !== UserRole.CONTRACTOR) {
-    throw new ForbiddenError('Only contractors can create or modify updates');
+/**
+ * Check if user is part of a project team
+ */
+const isUserInProjectTeam = async (
+  userId: string,
+  projectId: string
+): Promise<{ isMember: boolean; contractorId: string | null }> => {
+  const project = await Project.findById(projectId);
+  if (!project) {
+    throw new NotFoundError('Project');
   }
 
-  return {
-    ...user,
-    role: UserRole.CONTRACTOR
-  };
+  // Check if user is the contractor assigned to the project
+  if (project.contractorId && project.contractorId.toString() === userId) {
+    return { isMember: true, contractorId: project.contractorId.toString() };
+  }
+
+  // Check if user is a member of any team for this project
+  const team = await Team.findOne({
+    projectId: new Types.ObjectId(projectId),
+    $or: [
+      { contractorId: new Types.ObjectId(userId) },
+      { members: new Types.ObjectId(userId) }
+    ]
+  });
+
+  if (team) {
+    return { isMember: true, contractorId: team.contractorId.toString() };
+  }
+
+  return { isMember: false, contractorId: null };
 };
 
 type DocumentPayload = {
@@ -31,16 +51,23 @@ type DocumentPayload = {
   fileSize?: number;
   mimeType?: string;
   description?: string;
+  latitude: number;
+  longitude: number;
 };
 
 type DocumentMetadataInput = {
   type: DocumentType;
   description?: string;
   fileName?: string;
+  latitude: number;
+  longitude: number;
 };
 
 const isValidDocumentType = (type: unknown): type is DocumentType =>
   typeof type === 'string' && (Object.values(DocumentType) as string[]).includes(type);
+
+const isValidUpdateType = (type: unknown): type is UpdateType =>
+  typeof type === 'string' && (Object.values(UpdateType) as string[]).includes(type);
 
 const CLOUDINARY_FOLDER = process.env.CLOUDINARY_FOLDER ?? 'construction/documents';
 
@@ -107,7 +134,7 @@ const normalizeDocumentsPayload = (
   }
 
   if (!Array.isArray(parsedDocuments)) {
-    throw new ValidationError('Documents must be provided as an array of objects');
+    throw new ValidationError('Documents must be provided as a non-empty array of objects');
   }
 
   if (parsedDocuments.length === 0) {
@@ -148,6 +175,23 @@ const normalizeDocumentsPayload = (
       throw new ValidationError(`Document at index ${index} must have a valid description string`);
     }
 
+    // Validate latitude
+    const { latitude, longitude } = doc as Record<string, unknown>;
+    if (typeof latitude !== 'number' || isNaN(latitude)) {
+      throw new ValidationError(`Document at index ${index} must have a valid latitude (number)`);
+    }
+    if (latitude < -90 || latitude > 90) {
+      throw new ValidationError(`Document at index ${index} latitude must be between -90 and 90`);
+    }
+
+    // Validate longitude
+    if (typeof longitude !== 'number' || isNaN(longitude)) {
+      throw new ValidationError(`Document at index ${index} must have a valid longitude (number)`);
+    }
+    if (longitude < -180 || longitude > 180) {
+      throw new ValidationError(`Document at index ${index} longitude must be between -180 and 180`);
+    }
+
     return {
       uploadedBy,
       type,
@@ -155,7 +199,9 @@ const normalizeDocumentsPayload = (
       filePath: filePath.trim(),
       fileSize,
       mimeType: mimeType ? (mimeType as string).trim() : undefined,
-      description: description ? (description as string).trim() : undefined
+      description: description ? (description as string).trim() : undefined,
+      latitude,
+      longitude
     };
   });
 };
@@ -195,7 +241,7 @@ const parseDocumentMetadata = (
       throw new ValidationError(`Document metadata at index ${index} must be an object`);
     }
 
-    const { type, description, fileName } = item as Record<string, unknown>;
+    const { type, description, fileName, latitude, longitude } = item as Record<string, unknown>;
 
     if (!isValidDocumentType(type)) {
       throw new ValidationError(`Document metadata at index ${index} has an invalid type`);
@@ -211,10 +257,28 @@ const parseDocumentMetadata = (
       throw new ValidationError(`Document metadata at index ${index} must have a valid file name`);
     }
 
+    // Validate latitude
+    if (typeof latitude !== 'number' || isNaN(latitude)) {
+      throw new ValidationError(`Document metadata at index ${index} must have a valid latitude (number)`);
+    }
+    if (latitude < -90 || latitude > 90) {
+      throw new ValidationError(`Document metadata at index ${index} latitude must be between -90 and 90`);
+    }
+
+    // Validate longitude
+    if (typeof longitude !== 'number' || isNaN(longitude)) {
+      throw new ValidationError(`Document metadata at index ${index} must have a valid longitude (number)`);
+    }
+    if (longitude < -180 || longitude > 180) {
+      throw new ValidationError(`Document metadata at index ${index} longitude must be between -180 and 180`);
+    }
+
     return {
       type,
       description: description ? (description as string).trim() : undefined,
-      fileName: fileName ? (fileName as string).trim() : undefined
+      fileName: fileName ? (fileName as string).trim() : undefined,
+      latitude,
+      longitude
     };
   });
 };
@@ -229,8 +293,6 @@ const buildDocumentsFromUploads = async (
   }
 
   const metadata = parseDocumentMetadata(rawMetadata, files.length);
-  console.log("METADATA:",metadata);
-  
 
   const uploadedDocuments = await Promise.all(
     files.map(async (file, index) => {
@@ -259,7 +321,9 @@ const buildDocumentsFromUploads = async (
         filePath: cloudinaryResult.secure_url,
         fileSize: file.size,
         mimeType: file.mimetype,
-        description: metadata[index].description
+        description: metadata[index].description,
+        latitude: metadata[index].latitude,
+        longitude: metadata[index].longitude
       };
     })
   );
@@ -267,64 +331,150 @@ const buildDocumentsFromUploads = async (
   return uploadedDocuments;
 };
 
+/**
+ * Normalize date to start of day (for comparison)
+ */
+const normalizeDate = (date: Date): Date => {
+  const normalized = new Date(date);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+};
+
+/**
+ * Create update with validation
+ */
 export const createUpdate = async (req: AuthRequest, res: Response): Promise<void> => {
-  const user = ensureContractorRole(req);
+  if (!req.user) {
+    throw new ValidationError('User information is required');
+  }
 
-  const { projectId, status, updateDate, timestamp, documents, updateDescription } = req.body;
+  const { projectId, updateType, status, updateDate, updateDescription } = req.body;
 
-  if (!projectId || !status || !updateDate) {
-    throw new ValidationError('Project ID, status, and update date are required');
+  // Validate required fields
+  if (!projectId || !updateType || !status) {
+    throw new ValidationError('Project ID, update type (morning/evening), and status are required');
   }
 
   if (!Types.ObjectId.isValid(projectId)) {
     throw new ValidationError('Project ID must be a valid identifier');
   }
 
+  if (!isValidUpdateType(updateType)) {
+    throw new ValidationError('Update type must be either "morning" or "evening"');
+  }
+
+  // Validate project exists and is IN_PROGRESS
   const project = await Project.findById(projectId);
   if (!project) {
     throw new NotFoundError('Project');
   }
 
-  const parsedUpdateDate = new Date(updateDate);
+  if (project.status !== ProjectStatus.IN_PROGRESS) {
+    throw new ValidationError(
+      `Updates can only be posted for projects with status "in_progress". Current status: ${project.status}`
+    );
+  }
+
+  // Check if user is part of project team
+  const { isMember, contractorId } = await isUserInProjectTeam(req.user.id, projectId);
+  if (!isMember || !contractorId) {
+    throw new ForbiddenError('You must be a member of the project team to post updates');
+  }
+
+  // Parse and validate update date
+  let parsedUpdateDate: Date;
+  if (updateDate) {
+    parsedUpdateDate = new Date(updateDate);
   if (Number.isNaN(parsedUpdateDate.getTime())) {
     throw new ValidationError('Update date must be a valid date');
   }
-
-  let parsedTimestamp: Date | null = null;
-  if (timestamp) {
-    parsedTimestamp = new Date(timestamp);
-    if (Number.isNaN(parsedTimestamp.getTime())) {
-      throw new ValidationError('Timestamp must be a valid date');
-    }
+  } else {
+    parsedUpdateDate = new Date();
   }
 
-  const projectObjectId = new Types.ObjectId(projectId);
-  const uploadedByObjectId = new Types.ObjectId(user.id);
+  // Normalize date to start of day for comparison
+  const normalizedDate = normalizeDate(parsedUpdateDate);
+
+  // Check if user already posted this type of update today
+  // Since updateDate is normalized to start of day, we can do exact match
+  const existingUpdate = await Update.findOne({
+    postedBy: new Types.ObjectId(req.user.id),
+    projectId: new Types.ObjectId(projectId),
+    updateDate: normalizedDate,
+    updateType
+  });
+
+  if (existingUpdate) {
+    throw new ValidationError(
+      `You have already posted a ${updateType} update for this project today`
+    );
+  }
+
+  // Process uploaded files
+  const uploadedByObjectId = new Types.ObjectId(req.user.id);
   const files = extractUploadedFiles(req);
-  console.log("FILES:",files);
   const metadataSource =
     req.body.documentMetadata ?? req.body.documentsMetadata ?? req.body.documentsMeta;
-  const uploadedDocuments = await buildDocumentsFromUploads(files, uploadedByObjectId, metadataSource);
-  const normalizedDocuments = normalizeDocumentsPayload(documents, uploadedByObjectId);
+  const uploadedDocuments = await buildDocumentsFromUploads(
+    files,
+    uploadedByObjectId,
+    metadataSource
+  );
+  const normalizedDocuments = normalizeDocumentsPayload(req.body.documents, uploadedByObjectId);
+  const allDocuments = [...normalizedDocuments, ...uploadedDocuments];
+
+  // Require at least one document/image
+  if (allDocuments.length === 0) {
+    throw new ValidationError('At least one image/document is required for each update');
+  }
+
   const normalizedDescription =
     typeof updateDescription === 'string' ? updateDescription.trim() : undefined;
 
-    console.log("TESTINGGGGG:",uploadedDocuments);
-    
-
+  // Create update with auto-logged timestamp
+  // Note: updateDate is normalized to start of day for unique index, timestamp has exact time
   const update = await Update.create({
-    projectId: projectObjectId,
-    contractorId: user.id,
+    projectId: new Types.ObjectId(projectId),
+    contractorId: new Types.ObjectId(contractorId),
+    postedBy: uploadedByObjectId,
+    updateType,
     status,
-    updateDate: parsedUpdateDate,
-    timestamp: parsedTimestamp ?? new Date(),
-    updateDescription: normalizedDescription ? normalizedDescription : undefined,
-    documents: [...normalizedDocuments, ...uploadedDocuments]
+    updateDate: normalizedDate, // Normalized to start of day for unique index
+    timestamp: new Date(), // Auto-logged exact time
+    updateDescription: normalizedDescription || undefined,
+    documents: allDocuments
   });
+
+  // Create or update attendance record
+  const attendanceDate = normalizedDate; // Already normalized
+  const attendance = await Attendance.findOneAndUpdate(
+    {
+      userId: uploadedByObjectId,
+      projectId: new Types.ObjectId(projectId),
+      date: attendanceDate
+    },
+    {
+      userId: uploadedByObjectId,
+      projectId: new Types.ObjectId(projectId),
+      date: attendanceDate,
+      ...(updateType === UpdateType.MORNING
+        ? { morningUpdateId: update._id }
+        : { eveningUpdateId: update._id })
+      // Note: isPresent will be set by the pre-save hook based on both update IDs
+    },
+    {
+      upsert: true,
+      new: true
+    }
+  );
+
+  // Save to trigger pre-save hook which will set isPresent correctly based on both update IDs
+  await attendance.save();
 
   const populatedUpdate = await Update.findById(update._id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
+    .populate('postedBy', 'name email role')
     .populate('documents.uploadedBy', 'name email role');
 
   res.status(201).json({
@@ -335,26 +485,66 @@ export const createUpdate = async (req: AuthRequest, res: Response): Promise<voi
 };
 
 export const getUpdates = async (req: AuthRequest, res: Response): Promise<void> => {
-  const { projectId, contractorId } = req.query;
+  const { projectId, contractorId, postedBy, updateType, page, limit } = req.query;
 
   const filter: any = {};
   if (projectId) filter.projectId = projectId;
   if (contractorId) filter.contractorId = contractorId;
+  if (postedBy) filter.postedBy = postedBy;
+  if (updateType) filter.updateType = updateType;
 
-  if (req.user?.role === UserRole.CONTRACTOR) {
-    filter.contractorId = req.user.id;
+  // Contractors and team members can only see updates from their projects
+  if (req.user?.role === UserRole.CONTRACTOR || req.user?.role === UserRole.MEMBER) {
+    // Find all projects where user is contractor or team member
+    const teams = await Team.find({
+      $or: [
+        { contractorId: req.user.id },
+        { members: req.user.id }
+      ]
+    });
+    const projectIds = teams.map(t => t.projectId.toString());
+    
+    // Also include projects where user is the contractor
+    const projects = await Project.find({
+      $or: [
+        { contractorId: req.user.id },
+        { _id: { $in: projectIds } }
+      ]
+    });
+    const allProjectIds = projects.map(p => p._id.toString());
+    
+    filter.projectId = { $in: allProjectIds };
   }
+
+  // Pagination parameters
+  const pageNum = parseInt(page as string) || 1;
+  const limitNum = parseInt(limit as string) || 10;
+  const skip = (pageNum - 1) * limitNum;
+
+  // Get total count for pagination metadata
+  const total = await Update.countDocuments(filter);
 
   const updates = await Update.find(filter)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
+    .populate('postedBy', 'name email role')
     .populate('documents.uploadedBy', 'name email role')
-    .sort({ updateDate: -1, createdAt: -1 });
+    .sort({ updateDate: -1, createdAt: -1 })
+    .skip(skip)
+    .limit(limitNum);
+
+  const totalPages = Math.ceil(total / limitNum);
 
   res.status(200).json({
     success: true,
     data: updates,
-    count: updates.length
+    count: updates.length,
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages
+    }
   });
 };
 
@@ -364,14 +554,19 @@ export const getUpdateById = async (req: AuthRequest, res: Response): Promise<vo
   const update = await Update.findById(id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
+    .populate('postedBy', 'name email role')
     .populate('documents.uploadedBy', 'name email role');
 
   if (!update) {
     throw new NotFoundError('Update');
   }
 
-  if (req.user?.role === UserRole.CONTRACTOR && update.contractorId.toString() !== req.user.id) {
+  // Check if user has access to this update
+  if (req.user?.role === UserRole.CONTRACTOR || req.user?.role === UserRole.MEMBER) {
+    const { isMember } = await isUserInProjectTeam(req.user.id, update.projectId.toString());
+    if (!isMember) {
     throw new NotFoundError('Update');
+    }
   }
 
   res.status(200).json({
@@ -381,7 +576,9 @@ export const getUpdateById = async (req: AuthRequest, res: Response): Promise<vo
 };
 
 export const addDocumentsToUpdate = async (req: AuthRequest, res: Response): Promise<void> => {
-  const user = ensureContractorRole(req);
+  if (!req.user) {
+    throw new ValidationError('User information is required');
+  }
 
   const { id } = req.params;
   const { documents } = req.body;
@@ -391,15 +588,20 @@ export const addDocumentsToUpdate = async (req: AuthRequest, res: Response): Pro
     throw new NotFoundError('Update');
   }
 
-  if (update.contractorId.toString() !== user.id) {
+  // Only the user who posted the update can add documents
+  if (update.postedBy.toString() !== req.user.id) {
     throw new ForbiddenError('You can only modify your own updates');
   }
 
-  const uploadedByObjectId = new Types.ObjectId(user.id);
+  const uploadedByObjectId = new Types.ObjectId(req.user.id);
   const files = extractUploadedFiles(req);
   const metadataSource =
     req.body.documentMetadata ?? req.body.documentsMetadata ?? req.body.documentsMeta;
-  const uploadedDocuments = await buildDocumentsFromUploads(files, uploadedByObjectId, metadataSource);
+  const uploadedDocuments = await buildDocumentsFromUploads(
+    files,
+    uploadedByObjectId,
+    metadataSource
+  );
   const normalizedDocuments = normalizeDocumentsPayload(documents, uploadedByObjectId);
   const combinedDocuments = [...normalizedDocuments, ...uploadedDocuments];
 
@@ -416,6 +618,7 @@ export const addDocumentsToUpdate = async (req: AuthRequest, res: Response): Pro
   const populatedUpdate = await Update.findById(update._id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
+    .populate('postedBy', 'name email role')
     .populate('documents.uploadedBy', 'name email role');
 
   res.status(200).json({
@@ -424,5 +627,3 @@ export const addDocumentsToUpdate = async (req: AuthRequest, res: Response): Pro
     message: 'Documents added to update successfully'
   });
 };
-
-

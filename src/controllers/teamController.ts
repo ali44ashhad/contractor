@@ -1,15 +1,80 @@
 import { Response } from 'express';
-import { Team, ITeamMember } from '../models/Team';
+import { Team } from '../models/Team';
 import { Project } from '../models/Project';
-import { User, UserRole } from '../models/User';
+import { User, UserRole, IUser } from '../models/User';
 import { AuthRequest } from '../middleware/auth';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import mongoose from 'mongoose';
+
+/**
+ * Allowed roles for team members
+ */
+const ALLOWED_MEMBER_ROLES = [
+  UserRole.DEVELOPER,
+  UserRole.CONTRACTOR,
+  UserRole.MEMBER,
+  UserRole.ACCOUNTS
+];
+
+/**
+ * Validate member user IDs and return validated user documents
+ */
+const validateMemberUserIds = async (
+  memberIds: (string | mongoose.Types.ObjectId)[]
+): Promise<mongoose.Types.ObjectId[]> => {
+  if (!Array.isArray(memberIds) || memberIds.length === 0) {
+    throw new ValidationError('Members must be provided as a non-empty array');
+  }
+
+  // Check for duplicates
+  const uniqueIds = [...new Set(memberIds.map(id => id.toString()))];
+  if (uniqueIds.length !== memberIds.length) {
+    throw new ValidationError('Duplicate member IDs are not allowed');
+  }
+
+  // Validate ObjectIds
+  const validObjectIds = uniqueIds
+    .map(id => {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid member ID format: ${id}`);
+      }
+      return new mongoose.Types.ObjectId(id);
+    });
+
+  // Find all users
+  const users: IUser[] = await User.find({
+    _id: { $in: validObjectIds },
+    isActive: true
+  });
+
+  // Check all IDs were found
+  if (users.length !== validObjectIds.length) {
+    const foundIds = users.map((u: IUser) => String(u._id));
+    const missingIds = validObjectIds
+      .map(id => id.toString())
+      .filter(id => !foundIds.includes(id));
+    throw new ValidationError(`Users not found: ${missingIds.join(', ')}`);
+  }
+
+  // Check all users have allowed roles
+  const invalidRoleUsers = users.filter(
+    user => !ALLOWED_MEMBER_ROLES.includes(user.role)
+  );
+  if (invalidRoleUsers.length > 0) {
+    const invalidRoles = invalidRoleUsers.map(u => `${u.email} (${u.role})`);
+    throw new ValidationError(
+      `Users with invalid roles for team membership: ${invalidRoles.join(', ')}`
+    );
+  }
+
+  return validObjectIds;
+};
 
 /**
  * Get all teams
  */
 export const getAllTeams = async (req: AuthRequest, res: Response): Promise<void> => {
-  const { projectId, contractorId } = req.query;
+  const { projectId, contractorId, page, limit } = req.query;
 
   const filter: any = {};
   if (projectId) filter.projectId = projectId;
@@ -20,16 +85,35 @@ export const getAllTeams = async (req: AuthRequest, res: Response): Promise<void
     filter.contractorId = req.user.id;
   }
 
+  // Pagination parameters
+  const pageNum = parseInt(page as string) || 1;
+  const limitNum = parseInt(limit as string) || 10;
+  const skip = (pageNum - 1) * limitNum;
+
+  // Get total count for pagination metadata
+  const total = await Team.countDocuments(filter);
+
   const teams = await Team.find(filter)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
     .populate('createdBy', 'name email')
-    .sort({ createdAt: -1 });
+    .populate('members', 'name email role phone')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limitNum);
+
+  const totalPages = Math.ceil(total / limitNum);
 
   res.status(200).json({
     success: true,
     data: teams,
-    count: teams.length
+    count: teams.length,
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages
+    }
   });
 };
 
@@ -42,7 +126,8 @@ export const getTeamById = async (req: AuthRequest, res: Response): Promise<void
   const team = await Team.findById(id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
-    .populate('createdBy', 'name email');
+    .populate('createdBy', 'name email')
+    .populate('members', 'name email role phone');
 
   if (!team) {
     throw new NotFoundError('Team');
@@ -90,30 +175,25 @@ export const createTeam = async (req: AuthRequest, res: Response): Promise<void>
     throw new ValidationError('Invalid contractor user');
   }
 
-  if (members && !Array.isArray(members)) {
-    throw new ValidationError('Members must be provided as an array');
-  }
-
+  // Validate and process member user IDs
+  let memberUserIds: mongoose.Types.ObjectId[] = [];
   if (members) {
-    members.forEach((member: ITeamMember) => {
-      if (!member.name || !member.role) {
-        throw new ValidationError('Each member must have name and role');
-      }
-    });
+    memberUserIds = await validateMemberUserIds(members);
   }
 
   const team = await Team.create({
     projectId,
     contractorId,
     teamName,
-    members: members || [],
+    members: memberUserIds,
     createdBy: req.user.id
   });
 
   const populatedTeam = await Team.findById(team._id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
-    .populate('createdBy', 'name email');
+    .populate('createdBy', 'name email')
+    .populate('members', 'name email role phone');
 
   res.status(201).json({
     success: true,
@@ -133,26 +213,35 @@ export const addTeamMembers = async (req: AuthRequest, res: Response): Promise<v
     throw new ValidationError('Members array is required and must not be empty');
   }
 
-  // Validate each member has required fields
-  for (const member of members) {
-    if (!member.name || !member.role) {
-      throw new ValidationError('Each member must have name and role');
-    }
-  }
-
   const team = await Team.findById(id);
   if (!team) {
     throw new NotFoundError('Team');
   }
 
+  // Validate new member user IDs
+  const newMemberUserIds = await validateMemberUserIds(members);
+
+  // Check for duplicates with existing team members
+  const existingMemberIds = team.members.map(m => m.toString());
+  const duplicateIds = newMemberUserIds
+    .map(id => id.toString())
+    .filter(id => existingMemberIds.includes(id));
+
+  if (duplicateIds.length > 0) {
+    throw new ValidationError(
+      `Members already in team: ${duplicateIds.join(', ')}`
+    );
+  }
+
   // Add new members to existing members
-  team.members.push(...members);
+  team.members.push(...newMemberUserIds);
   await team.save();
 
   const populatedTeam = await Team.findById(team._id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
-    .populate('createdBy', 'name email');
+    .populate('createdBy', 'name email')
+    .populate('members', 'name email role phone');
 
   res.status(200).json({
     success: true,
@@ -179,30 +268,16 @@ export const updateTeam = async (req: AuthRequest, res: Response): Promise<void>
       throw new NotFoundError('Team');
     }
     // Only allow updating members for contractors
-    if (members) {
-      if (!Array.isArray(members)) {
-        throw new ValidationError('Members must be provided as an array');
-      }
-      members.forEach((member: ITeamMember) => {
-        if (!member.name || !member.role) {
-          throw new ValidationError('Each member must have name and role');
-        }
-      });
-      team.members = members;
+    if (members !== undefined) {
+      const memberUserIds = await validateMemberUserIds(members);
+      team.members = memberUserIds;
     }
   } else {
     // Admin can update everything
     if (teamName) team.teamName = teamName;
-    if (members) {
-      if (!Array.isArray(members)) {
-        throw new ValidationError('Members must be provided as an array');
-      }
-      members.forEach((member: ITeamMember) => {
-        if (!member.name || !member.role) {
-          throw new ValidationError('Each member must have name and role');
-        }
-      });
-      team.members = members;
+    if (members !== undefined) {
+      const memberUserIds = await validateMemberUserIds(members);
+      team.members = memberUserIds;
     }
   }
 
@@ -211,7 +286,8 @@ export const updateTeam = async (req: AuthRequest, res: Response): Promise<void>
   const populatedTeam = await Team.findById(team._id)
     .populate('projectId', 'name description')
     .populate('contractorId', 'name email role')
-    .populate('createdBy', 'name email');
+    .populate('createdBy', 'name email')
+    .populate('members', 'name email role phone');
 
   res.status(200).json({
     success: true,

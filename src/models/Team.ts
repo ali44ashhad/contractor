@@ -1,61 +1,17 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 /**
- * Team member interface (embedded in Team)
- */
-export interface ITeamMember {
-  name: string;
-  role: string;
-  email?: string;
-  phone?: string;
-  specialization?: string;
-}
-
-/**
  * Team interface
  */
 export interface ITeam extends Document {
   projectId: mongoose.Types.ObjectId;
   contractorId: mongoose.Types.ObjectId;
   teamName: string;
-  members: ITeamMember[];
+  members: mongoose.Types.ObjectId[]; // References to User documents
   createdBy: mongoose.Types.ObjectId; // Admin who added the team
   createdAt: Date;
   updatedAt: Date;
 }
-
-/**
- * Team member schema (embedded)
- */
-const TeamMemberSchema: Schema = new Schema(
-  {
-    name: {
-      type: String,
-      required: [true, 'Team member name is required'],
-      trim: true
-    },
-    role: {
-      type: String,
-      required: [true, 'Team member role is required'],
-      trim: true
-    },
-    email: {
-      type: String,
-      lowercase: true,
-      trim: true,
-      match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address']
-    },
-    phone: {
-      type: String,
-      trim: true
-    },
-    specialization: {
-      type: String,
-      trim: true
-    }
-  },
-  { _id: false }
-);
 
 /**
  * Team schema definition
@@ -78,7 +34,8 @@ const TeamSchema: Schema = new Schema(
       trim: true
     },
     members: {
-      type: [TeamMemberSchema],
+      type: [Schema.Types.ObjectId],
+      ref: 'User',
       default: []
     },
     createdBy: {
@@ -97,6 +54,7 @@ const TeamSchema: Schema = new Schema(
 TeamSchema.index({ projectId: 1 });
 TeamSchema.index({ contractorId: 1 });
 TeamSchema.index({ 'projectId': 1, 'contractorId': 1 });
+TeamSchema.index({ members: 1 });
 
 export const Team = mongoose.model<ITeam>('Team', TeamSchema);
 

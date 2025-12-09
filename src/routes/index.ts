@@ -5,6 +5,9 @@ import projectRoutes from './projectRoutes';
 import teamRoutes from './teamRoutes';
 import reportRoutes from './reportRoutes';
 import updateRoutes from './updateRoutes';
+import attendanceRoutes from './attendanceRoutes';
+import requestRoutes from './requestRoutes';
+import dashboardRoutes from './dashboardRoutes';
 
 const router = Router();
 
@@ -17,6 +20,9 @@ router.use('/projects', projectRoutes);
 router.use('/teams', teamRoutes);
 router.use('/reports', reportRoutes);
 router.use('/updates', updateRoutes);
+router.use('/attendance', attendanceRoutes);
+router.use('/requests', requestRoutes);
+router.use('/dashboard', dashboardRoutes);
 
 export default router;
 

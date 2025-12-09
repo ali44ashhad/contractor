@@ -7,20 +7,38 @@ import { NotFoundError, ValidationError } from '../utils/errors';
  * Get all users (Admin only)
  */
 export const getAllUsers = async (req: AuthRequest, res: Response): Promise<void> => {
-  const { role, isActive } = req.query;
+  const { role, isActive, page, limit } = req.query;
 
   const filter: any = {};
   if (role) filter.role = role;
   if (isActive !== undefined) filter.isActive = isActive === 'true';
 
+  // Pagination parameters
+  const pageNum = parseInt(page as string) || 1;
+  const limitNum = parseInt(limit as string) || 10;
+  const skip = (pageNum - 1) * limitNum;
+
+  // Get total count for pagination metadata
+  const total = await User.countDocuments(filter);
+
   const users = await User.find(filter)
     .select('-password')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(limitNum);
+
+  const totalPages = Math.ceil(total / limitNum);
 
   res.status(200).json({
     success: true,
     data: users,
-    count: users.length
+    count: users.length,
+    pagination: {
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages
+    }
   });
 };
 
