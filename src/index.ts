@@ -18,15 +18,37 @@ const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
   : ['http://localhost:5173', 'https://contractror-frontend.vercel.app'];
 
-// Simple CORS configuration like worker-community
+// CORS configuration with explicit headers for iOS Safari compatibility
+// iOS Safari requires explicit Access-Control-Allow-Credentials header
 app.use(cors({
-  origin: allowedOrigins,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
+  // Explicit headers for iOS Safari compatibility
+  exposedHeaders: ['Set-Cookie'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
 
-// Explicit OPTIONS handler for ALL paths (critical for mobile browsers)
-// This matches the worker-community pattern that works on mobile
-app.options(/^.*$/, cors({ origin: true, credentials: true }));
+// Explicit OPTIONS handler for ALL paths (critical for mobile browsers, especially iOS Safari)
+// iOS Safari requires explicit CORS preflight handling
+app.options(/^.*$/, (req, res) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.sendStatus(200);
+});
 
 // Middleware
 app.use(express.json());
