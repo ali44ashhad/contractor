@@ -3,7 +3,39 @@ import { User, UserRole, IUser } from '../models/User';
 import { generateToken } from '../utils/jwt';
 import { ValidationError, UnauthorizedError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
-import { getCookieOptions, getClearCookieOptions } from '../utils/cookies';
+import { getCookieOptions, getClearCookieOptions, isIOSSafari } from '../utils/cookies';
+
+/**
+ * Set cookie with iOS Safari workaround
+ * iOS Safari requires manual Set-Cookie header construction for better compatibility
+ */
+const setCookieForResponse = (
+  res: Response,
+  name: string,
+  value: string,
+  options: any,
+  userAgent?: string
+): void => {
+  const isIOS = isIOSSafari(userAgent);
+  const isProduction = process.env.NODE_ENV === 'production';
+  
+  if (isIOS && isProduction) {
+    // iOS Safari: Manually construct Set-Cookie header for better compatibility
+    // Use SameSite=None; Secure format that iOS Safari accepts
+    const maxAge = options.maxAge ? `; Max-Age=${Math.floor(options.maxAge / 1000)}` : '';
+    const secure = options.secure ? '; Secure' : '';
+    const httpOnly = options.httpOnly ? '; HttpOnly' : '';
+    const path = options.path ? `; Path=${options.path}` : '';
+    // iOS Safari: Use SameSite=None explicitly in the header
+    const sameSite = '; SameSite=None';
+    
+    const cookieString = `${name}=${value}${maxAge}${path}${secure}${httpOnly}${sameSite}`;
+    res.setHeader('Set-Cookie', cookieString);
+  } else {
+    // Other browsers: Use Express's res.cookie() method
+    res.cookie(name, value, options);
+  }
+};
 
 /**
  * Register new user
@@ -44,8 +76,10 @@ export const register = async (req: AuthRequest, res: Response): Promise<void> =
   });
 
   // Set token in httpOnly cookie with proper cross-domain support
-  const cookieOptions = getCookieOptions();
-  res.cookie('token', token, cookieOptions);
+  // Pass user agent for iOS Safari detection
+  const userAgent = req.headers['user-agent'];
+  const cookieOptions = getCookieOptions(userAgent);
+  setCookieForResponse(res, 'token', token, cookieOptions, userAgent);
 
   // Remove password from response
   const userResponse: any = user.toObject();
@@ -98,8 +132,10 @@ export const login = async (req: AuthRequest, res: Response): Promise<void> => {
   });
 
   // Set token in httpOnly cookie with proper cross-domain support
-  const cookieOptions = getCookieOptions();
-  res.cookie('token', token, cookieOptions);
+  // Pass user agent for iOS Safari detection
+  const userAgent = req.headers['user-agent'];
+  const cookieOptions = getCookieOptions(userAgent);
+  setCookieForResponse(res, 'token', token, cookieOptions, userAgent);
 
   // Remove password from response
   const userResponse: any = user.toObject();
@@ -202,8 +238,10 @@ export const refreshToken = async (req: AuthRequest, res: Response): Promise<voi
   });
 
   // Update token in cookie with proper cross-domain support
-  const cookieOptions = getCookieOptions();
-  res.cookie('token', token, cookieOptions);
+  // Pass user agent for iOS Safari detection
+  const userAgent = req.headers['user-agent'];
+  const cookieOptions = getCookieOptions(userAgent);
+  setCookieForResponse(res, 'token', token, cookieOptions, userAgent);
 
   res.status(200).json({
     success: true,
@@ -216,7 +254,9 @@ export const refreshToken = async (req: AuthRequest, res: Response): Promise<voi
  */
 export const logout = async (req: AuthRequest, res: Response): Promise<void> => {
   // Clear the token cookie with proper cross-domain support
-  const clearCookieOptions = getClearCookieOptions();
+  // Pass user agent for iOS Safari detection
+  const userAgent = req.headers['user-agent'];
+  const clearCookieOptions = getClearCookieOptions(userAgent);
   res.clearCookie('token', clearCookieOptions);
 
   res.status(200).json({
