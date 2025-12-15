@@ -3,6 +3,7 @@ import { User, UserRole, IUser } from '../models/User';
 import { generateToken } from '../utils/jwt';
 import { ValidationError, UnauthorizedError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
+import { getCookieOptions, getClearCookieOptions } from '../utils/cookies';
 
 /**
  * Register new user
@@ -42,15 +43,8 @@ export const register = async (req: AuthRequest, res: Response): Promise<void> =
     role: user.role
   });
 
-  // Set token in httpOnly cookie
-  const cookieOptions = {
-    httpOnly: true, // Prevents JavaScript access (XSS protection)
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-    sameSite: 'strict' as const, // CSRF protection
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
-    path: '/'
-  };
-
+  // Set token in httpOnly cookie with proper cross-domain support
+  const cookieOptions = getCookieOptions();
   res.cookie('token', token, cookieOptions);
 
   // Remove password from response
@@ -103,15 +97,8 @@ export const login = async (req: AuthRequest, res: Response): Promise<void> => {
     role: user.role
   });
 
-  // Set token in httpOnly cookie
-  const cookieOptions = {
-    httpOnly: true, // Prevents JavaScript access (XSS protection)
-    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
-    sameSite: 'strict' as const, // CSRF protection
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
-    path: '/'
-  };
-
+  // Set token in httpOnly cookie with proper cross-domain support
+  const cookieOptions = getCookieOptions();
   res.cookie('token', token, cookieOptions);
 
   // Remove password from response
@@ -214,15 +201,8 @@ export const refreshToken = async (req: AuthRequest, res: Response): Promise<voi
     role: user.role
   });
 
-  // Update token in cookie
-  const cookieOptions = {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict' as const,
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    path: '/'
-  };
-
+  // Update token in cookie with proper cross-domain support
+  const cookieOptions = getCookieOptions();
   res.cookie('token', token, cookieOptions);
 
   res.status(200).json({
@@ -235,13 +215,9 @@ export const refreshToken = async (req: AuthRequest, res: Response): Promise<voi
  * Logout user (clear cookie)
  */
 export const logout = async (req: AuthRequest, res: Response): Promise<void> => {
-  // Clear the token cookie
-  res.clearCookie('token', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    path: '/'
-  });
+  // Clear the token cookie with proper cross-domain support
+  const clearCookieOptions = getClearCookieOptions();
+  res.clearCookie('token', clearCookieOptions);
 
   res.status(200).json({
     success: true,
