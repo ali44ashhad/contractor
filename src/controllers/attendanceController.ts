@@ -68,7 +68,7 @@ export const getAttendance = async (req: AuthRequest, res: Response): Promise<vo
         { _id: { $in: projectIds } }
       ]
     });
-    const allProjectIds = projects.map(p => p._id.toString());
+    const allProjectIds = projects.map((p) => (p._id as Types.ObjectId).toString());
     
     if (filter.projectId) {
       // If specific project requested, verify access

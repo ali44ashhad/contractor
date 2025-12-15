@@ -518,7 +518,7 @@ export const getUpdates = async (req: AuthRequest, res: Response): Promise<void>
         { _id: { $in: projectIds } }
       ]
     });
-    const allProjectIds = projects.map(p => p._id.toString());
+    const allProjectIds = projects.map((p) => (p._id as Types.ObjectId).toString());
     
     filter.projectId = { $in: allProjectIds };
   }

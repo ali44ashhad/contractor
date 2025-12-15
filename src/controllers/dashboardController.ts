@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import { Types } from 'mongoose';
 import { Project, ProjectStatus } from '../models/Project';
 import { Update } from '../models/Update';
 import { ProjectRequest, RequestStatus } from '../models/ProjectRequest';
@@ -87,7 +88,7 @@ export const getRecentUpdates = async (req: AuthRequest, res: Response): Promise
     const lng = firstDocument?.longitude;
 
     return {
-      _id: update._id.toString(),
+      _id: (update._id as Types.ObjectId).toString(),
       imageUrl,
       contractorName: contractor?.name || 'Unknown Contractor',
       projectName: project?.name || 'Unknown Project',
