@@ -19,8 +19,23 @@ export interface CookieOptions {
 }
 
 /**
- * Detect if the request is from iOS Safari
- * iOS Safari has known issues with SameSite=None cookies
+ * Detect if the request is from Safari (iOS or desktop)
+ * Safari has known issues with SameSite=None cookies and requires special handling
+ */
+export const isSafari = (userAgent: string | undefined): boolean => {
+  if (!userAgent) return false;
+  
+  // Detect Safari on any platform (iOS, macOS, etc.)
+  // Safari: contains "Safari" but NOT "Chrome", "CriOS", "FxiOS", or "Edg"
+  // This catches both iOS Safari and desktop Safari
+  const isSafariBrowser = /Safari/.test(userAgent) && 
+    !/Chrome|CriOS|FxiOS|Edg|OPR/.test(userAgent);
+  
+  return isSafariBrowser;
+};
+
+/**
+ * Detect if the request is from iOS Safari (for specific iOS handling)
  */
 export const isIOSSafari = (userAgent: string | undefined): boolean => {
   if (!userAgent) return false;
@@ -38,32 +53,34 @@ export const isIOSSafari = (userAgent: string | undefined): boolean => {
 /**
  * Get cookie options for authentication cookies
  * For cross-domain cookies (production), uses sameSite: 'none' and secure: true
- * For same-domain cookies (development), uses sameSite: 'strict'
+ * For same-domain cookies (development), uses sameSite: 'lax' (better Safari compatibility)
  * 
- * iOS Safari Fix: iOS Safari treats SameSite=None as SameSite=Strict in some versions
- * For iOS Safari, we omit SameSite attribute entirely (defaults to Lax, but works better)
+ * Safari Fix: Safari (both desktop and iOS) requires:
+ * 1. SameSite=None MUST have Secure=true
+ * 2. Proper attribute ordering in Set-Cookie header
+ * 3. No domain attribute for cross-domain cookies
  * 
- * @param userAgent - Optional user agent string to detect iOS Safari
+ * @param userAgent - Optional user agent string to detect Safari
  */
 export const getCookieOptions = (userAgent?: string): CookieOptions => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const isIOS = isIOSSafari(userAgent);
+  const isSafariBrowser = isSafari(userAgent);
   
-  // iOS Safari Fix: iOS Safari has issues with SameSite=None, but we still need it for cross-domain
-  // We'll handle iOS Safari specially in the controller by manually setting the header
-  // For now, use 'none' in production for all browsers (iOS will be handled manually)
+  // Safari Fix: Safari requires 'none' with 'secure' for cross-domain in production
+  // In development, use 'lax' for better Safari compatibility (works with same-origin)
   let sameSite: 'strict' | 'lax' | 'none' | boolean;
   
   if (isProduction) {
-    // Production: use 'none' for cross-domain (iOS Safari will be handled manually in controller)
+    // Production: use 'none' for cross-domain (requires secure: true)
     sameSite = 'none';
   } else {
-    // Development: use 'strict' for same-domain
-    sameSite = 'strict';
+    // Development: use 'lax' for better Safari compatibility
+    // 'lax' works better than 'strict' for Safari in development
+    sameSite = 'lax';
   }
   
-  // iOS Safari Fix: When sameSite is 'none', secure MUST be true
-  // For iOS Safari, we still use secure in production
+  // Safari Fix: When sameSite is 'none', secure MUST be true
+  // In production, always use secure. In development, use secure only if HTTPS
   const secure = isProduction ? true : false;
   
   return {
@@ -79,9 +96,9 @@ export const getCookieOptions = (userAgent?: string): CookieOptions => {
  * Get cookie options for clearing cookies (logout)
  * Must match the same options used when setting the cookie
  * 
- * iOS Safari Fix: Must use the same secure and sameSite values as when setting the cookie
+ * Safari Fix: Must use the same secure and sameSite values as when setting the cookie
  * 
- * @param userAgent - Optional user agent string to detect iOS Safari
+ * @param userAgent - Optional user agent string to detect Safari
  */
 export const getClearCookieOptions = (userAgent?: string): {
   httpOnly: boolean;
@@ -90,7 +107,6 @@ export const getClearCookieOptions = (userAgent?: string): {
   path: string;
 } => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const isIOS = isIOSSafari(userAgent);
   
   // Must match the sameSite value used when setting the cookie
   let sameSite: 'strict' | 'lax' | 'none' | boolean;
@@ -99,8 +115,8 @@ export const getClearCookieOptions = (userAgent?: string): {
     // Production: use 'none' (must match getCookieOptions)
     sameSite = 'none';
   } else {
-    // Development: use 'strict'
-    sameSite = 'strict';
+    // Development: use 'lax' (must match getCookieOptions)
+    sameSite = 'lax';
   }
   
   // Must match the secure value used when setting the cookie
