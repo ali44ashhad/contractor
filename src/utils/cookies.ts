@@ -36,18 +36,32 @@ export const isSafari = (userAgent: string | undefined): boolean => {
 
 /**
  * Detect if the request is from iOS Safari (for specific iOS handling)
+ * iOS Safari and Chrome on iOS both have issues with cross-origin cookies
+ * This function detects all iOS browsers (Safari, Chrome, Firefox, etc.)
  */
 export const isIOSSafari = (userAgent: string | undefined): boolean => {
   if (!userAgent) return false;
   
-  // Detect iOS Safari or Chrome on iOS (both use WebKit)
-  // iOS Safari: contains "iPhone" or "iPad" and "Safari" but not "Chrome"
-  // iOS Chrome: contains "iPhone" or "iPad" and "CriOS" (Chrome on iOS)
+  // Detect iOS device (iPhone, iPad, iPod)
   const isIOS = /iPhone|iPad|iPod/.test(userAgent);
-  const isSafari = /Safari/.test(userAgent) && !/Chrome|CriOS|FxiOS/.test(userAgent);
+  
+  if (!isIOS) return false;
+  
+  // iOS Safari: contains "Safari" but NOT "Chrome", "CriOS", "FxiOS", or "Edg"
+  const isSafari = /Safari/.test(userAgent) && !/Chrome|CriOS|FxiOS|Edg|OPR/.test(userAgent);
+  
+  // iOS Chrome: contains "CriOS" (Chrome on iOS)
   const isIOSChrome = /CriOS/.test(userAgent);
   
-  return isIOS && (isSafari || isIOSChrome);
+  // iOS Firefox: contains "FxiOS" (Firefox on iOS)
+  const isIOSFirefox = /FxiOS/.test(userAgent);
+  
+  // iOS Edge: contains "EdgiOS" (Edge on iOS)
+  const isIOSEdge = /EdgiOS/.test(userAgent);
+  
+  // All iOS browsers have issues with cross-origin cookies
+  // Return true for any iOS browser
+  return isSafari || isIOSChrome || isIOSFirefox || isIOSEdge;
 };
 
 /**
@@ -60,22 +74,27 @@ export const isIOSSafari = (userAgent: string | undefined): boolean => {
  * 2. Proper attribute ordering in Set-Cookie header
  * 3. No domain attribute for cross-domain cookies
  * 
+ * iOS Safari Fix: iOS Safari blocks cross-origin cookies even in development (different ports)
+ * So we need to always return the token in the response body for iOS devices
+ * 
  * @param userAgent - Optional user agent string to detect Safari
  */
 export const getCookieOptions = (userAgent?: string): CookieOptions => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const isSafariBrowser = isSafari(userAgent);
+  const isIOSDevice = isIOSSafari(userAgent);
   
-  // Safari Fix: Safari requires 'none' with 'secure' for cross-domain in production
-  // In development, use 'lax' for better Safari compatibility (works with same-origin)
+  // iOS Safari Fix: iOS Safari blocks cross-origin cookies even in development
+  // If it's an iOS device, we'll still try to set the cookie, but the client
+  // should use the token from the response body as fallback
   let sameSite: 'strict' | 'lax' | 'none' | boolean;
   
   if (isProduction) {
     // Production: use 'none' for cross-domain (requires secure: true)
     sameSite = 'none';
   } else {
-    // Development: use 'lax' for better Safari compatibility
-    // 'lax' works better than 'strict' for Safari in development
+    // Development: use 'lax' for same-origin, but iOS Safari may still block it
+    // if frontend and backend are on different ports (cross-origin)
+    // In that case, the token fallback in response body will be used
     sameSite = 'lax';
   }
   
