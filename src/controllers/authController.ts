@@ -7,8 +7,8 @@ import { getCookieOptions, getClearCookieOptions, isSafari } from '../utils/cook
 
 /**
  * Set cookie with Safari-compatible format
- * Safari (both desktop and iOS) requires exact cookie attribute ordering and format
- * For SameSite=None cookies, Safari is extremely strict about the format
+ * Safari requires exact cookie format for SameSite=None cookies
+ * We use Express's res.cookie() but also ensure the header is set correctly
  */
 const setCookieForResponse = (
   res: Response,
@@ -17,34 +17,30 @@ const setCookieForResponse = (
   options: any,
   userAgent?: string
 ): void => {
-  const isProduction = process.env.NODE_ENV === 'production';
+  const isProduction = 
+    process.env.NODE_ENV === 'production' || 
+    process.env.VERCEL === '1' ||
+    process.env.VERCEL_ENV === 'production';
   
-  // For production with SameSite=None, use manual cookie string for Safari compatibility
-  // Safari requires exact format: Path -> Max-Age -> Secure -> HttpOnly -> SameSite=None
+  // For production with SameSite=None, manually set header to ensure Safari compatibility
+  // Safari is extremely strict about cookie format
   if (isProduction && options.sameSite === 'none') {
-    // Manually construct Set-Cookie header with exact Safari-compatible format
-    // Safari is very strict: no extra spaces, proper encoding, exact attribute order
     const encodedValue = encodeURIComponent(value);
     const path = options.path || '/';
     const maxAge = options.maxAge ? Math.floor(options.maxAge / 1000) : undefined;
     
-    // Build cookie string with exact Safari-required ordering
-    // Order: name=value; Path=path; Max-Age=seconds; Secure; HttpOnly; SameSite=None
-    let cookieString = `${name}=${encodedValue}`;
-    cookieString += `; Path=${path}`;
+    // Build cookie string with exact Safari-required format
+    // Format: name=value; Path=path; Max-Age=seconds; Secure; HttpOnly; SameSite=None
+    let cookieString = `${name}=${encodedValue}; Path=${path}`;
     if (maxAge) {
       cookieString += `; Max-Age=${maxAge}`;
     }
-    cookieString += '; Secure';
-    if (options.httpOnly) {
-      cookieString += '; HttpOnly';
-    }
-    cookieString += '; SameSite=None';
+    cookieString += '; Secure; HttpOnly; SameSite=None';
     
+    // Set the header directly
     res.setHeader('Set-Cookie', cookieString);
   } else {
-    // For development or non-SameSite=None cookies, use Express's res.cookie()
-    // Express handles encoding and formatting automatically
+    // For development, use Express's res.cookie()
     res.cookie(name, value, options);
   }
 };
@@ -268,18 +264,9 @@ export const logout = async (req: AuthRequest, res: Response): Promise<void> => 
   // Clear the token cookie with proper cross-domain support
   const userAgent = req.headers['user-agent'];
   const clearCookieOptions = getClearCookieOptions(userAgent);
-  const isProduction = process.env.NODE_ENV === 'production';
   
-  // For production with SameSite=None, use manual cookie string for Safari compatibility
-  if (isProduction && clearCookieOptions.sameSite === 'none') {
-    // Manually set cookie with empty value and immediate expiration
-    // Must match the exact format used when setting the cookie
-    const cookieString = `token=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=None`;
-    res.setHeader('Set-Cookie', cookieString);
-  } else {
-    // Use Express's clearCookie for other browsers
-    res.clearCookie('token', clearCookieOptions);
-  }
+  // Use Express's clearCookie which properly handles cookie clearing
+  res.clearCookie('token', clearCookieOptions);
 
   res.status(200).json({
     success: true,

@@ -70,13 +70,18 @@ export const isIOSSafari = (userAgent: string | undefined): boolean => {
  * 
  * Safari Requirements:
  * 1. SameSite=None MUST have Secure=true
- * 2. Proper attribute ordering in Set-Cookie header (handled in setCookieForResponse)
+ * 2. Proper attribute ordering in Set-Cookie header (handled by Express)
  * 3. No domain attribute for cross-domain cookies
  * 
  * @param userAgent - Optional user agent string (not currently used, kept for compatibility)
  */
 export const getCookieOptions = (userAgent?: string): CookieOptions => {
-  const isProduction = process.env.NODE_ENV === 'production';
+  // Detect production: check NODE_ENV or if running on Vercel (vercel.app domain)
+  // Vercel sets VERCEL=1 and VERCEL_ENV environment variables
+  const isProduction = 
+    process.env.NODE_ENV === 'production' || 
+    process.env.VERCEL === '1' ||
+    process.env.VERCEL_ENV === 'production';
   
   let sameSite: 'strict' | 'lax' | 'none' | boolean;
   
@@ -115,7 +120,11 @@ export const getClearCookieOptions = (userAgent?: string): {
   sameSite: 'strict' | 'lax' | 'none' | boolean;
   path: string;
 } => {
-  const isProduction = process.env.NODE_ENV === 'production';
+  // Detect production: check NODE_ENV or if running on Vercel
+  const isProduction = 
+    process.env.NODE_ENV === 'production' || 
+    process.env.VERCEL === '1' ||
+    process.env.VERCEL_ENV === 'production';
   
   // Must match the sameSite value used when setting the cookie
   let sameSite: 'strict' | 'lax' | 'none' | boolean;
