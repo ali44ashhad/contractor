@@ -17,20 +17,26 @@ const allowedOrigins = process.env.CORS_ORIGIN
 
 const corsOptions = {
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    // Allow requests with no origin (like mobile apps, Postman, or curl requests)
+    // This is important for mobile browsers which might not send origin in some cases
+    if (!origin) {
+      return callback(null, true);
+    }
     
-    // Check if origin is in allowed list
+    // Check if origin is in allowed list (exact match)
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      // Log rejected origin for debugging (especially useful for mobile issues)
+      console.warn(`CORS: Origin "${origin}" not allowed. Allowed origins:`, allowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
   credentials: true, // Allow cookies to be sent (required for cross-domain cookies)
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  maxAge: 86400 // Cache preflight requests for 24 hours (helps with mobile)
 };
 
 // Middleware
