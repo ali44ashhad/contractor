@@ -31,6 +31,7 @@ const setCookieForResponse = (
     
     // Build cookie string with exact Safari-required format
     // Format: name=value; Path=path; Max-Age=seconds; Secure; HttpOnly; SameSite=None
+    // Note: Partitioned attribute may help with Safari ITP but is not widely supported yet
     let cookieString = `${name}=${encodedValue}; Path=${path}`;
     if (maxAge) {
       cookieString += `; Max-Age=${maxAge}`;
@@ -84,9 +85,10 @@ export const register = async (req: AuthRequest, res: Response): Promise<void> =
   });
 
   // Set token in httpOnly cookie with proper cross-domain support
-  // Pass user agent for iOS Safari detection
+  // Pass user agent and origin for cookie configuration
   const userAgent = req.headers['user-agent'];
-  const cookieOptions = getCookieOptions(userAgent);
+  const origin = req.headers.origin;
+  const cookieOptions = getCookieOptions(userAgent, origin);
   setCookieForResponse(res, 'token', token, cookieOptions, userAgent);
 
   // Remove password from response
@@ -140,9 +142,10 @@ export const login = async (req: AuthRequest, res: Response): Promise<void> => {
   });
 
   // Set token in httpOnly cookie with proper cross-domain support
-  // Pass user agent for iOS Safari detection
+  // Pass user agent and origin for cookie configuration
   const userAgent = req.headers['user-agent'];
-  const cookieOptions = getCookieOptions(userAgent);
+  const origin = req.headers.origin;
+  const cookieOptions = getCookieOptions(userAgent, origin);
   setCookieForResponse(res, 'token', token, cookieOptions, userAgent);
 
   // Remove password from response
