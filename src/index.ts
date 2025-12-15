@@ -9,39 +9,26 @@ import { errorHandler } from './middleware/errorHandler';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS configuration for cookies
+// Cookie parser should be before CORS (matching worker-community pattern)
+app.use(cookieParser());
+
+// CORS configuration - use simple array like worker-community
 // Support multiple origins for development and production
 const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
   : ['http://localhost:5173', 'https://contractror-frontend.vercel.app'];
 
-const corsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps, Postman, or curl requests)
-    // This is important for mobile browsers which might not send origin in some cases
-    if (!origin) {
-      return callback(null, true);
-    }
-    
-    // Check if origin is in allowed list (exact match)
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      // Log rejected origin for debugging (especially useful for mobile issues)
-      console.warn(`CORS: Origin "${origin}" not allowed. Allowed origins:`, allowedOrigins);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true, // Allow cookies to be sent (required for cross-domain cookies)
-  optionsSuccessStatus: 200,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  maxAge: 86400 // Cache preflight requests for 24 hours (helps with mobile)
-};
+// Simple CORS configuration like worker-community
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
+
+// Explicit OPTIONS handler for ALL paths (critical for mobile browsers)
+// This matches the worker-community pattern that works on mobile
+app.options(/^.*$/, cors({ origin: true, credentials: true }));
 
 // Middleware
-app.use(cors(corsOptions));
-app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
