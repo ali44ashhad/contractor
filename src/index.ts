@@ -18,8 +18,8 @@ const allowedOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
   : ['http://localhost:5173', 'https://contractror-frontend.vercel.app'];
 
-// CORS configuration with explicit headers for iOS Safari compatibility
-// iOS Safari requires explicit Access-Control-Allow-Credentials header
+// CORS configuration with explicit headers for Safari compatibility
+// Safari requires explicit Access-Control-Allow-Credentials header
 app.use(cors({
   origin: (origin, callback) => {
     // Allow requests with no origin (mobile apps, Postman, etc.)
@@ -32,13 +32,14 @@ app.use(cors({
     }
   },
   credentials: true,
-  // Explicit headers for iOS Safari compatibility
+  // Expose Set-Cookie header so browsers can read it
   exposedHeaders: ['Set-Cookie'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  // Allow necessary headers for authentication
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie'],
 }));
 
-// Explicit OPTIONS handler for ALL paths (critical for mobile browsers, especially iOS Safari)
-// iOS Safari requires explicit CORS preflight handling
+// Explicit OPTIONS handler for ALL paths (critical for Safari and mobile browsers)
+// Safari requires explicit CORS preflight handling with proper headers
 app.options(/^.*$/, (req, res) => {
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
@@ -46,7 +47,8 @@ app.options(/^.*$/, (req, res) => {
   }
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Cookie');
+  res.header('Access-Control-Expose-Headers', 'Set-Cookie');
   res.sendStatus(200);
 });
 

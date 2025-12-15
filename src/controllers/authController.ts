@@ -3,15 +3,12 @@ import { User, UserRole, IUser } from '../models/User';
 import { generateToken } from '../utils/jwt';
 import { ValidationError, UnauthorizedError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
-import { getCookieOptions, getClearCookieOptions, isSafari, isIOSSafari } from '../utils/cookies';
+import { getCookieOptions, getClearCookieOptions, isSafari } from '../utils/cookies';
 
 /**
- * Set cookie with Safari workaround
- * Safari (both desktop and iOS) requires proper cookie attribute ordering
- * Safari is very strict about cookie format, especially for SameSite=None cookies
- * 
- * iOS Safari Note: Even with proper cookie settings, iOS Safari may still block
- * cross-origin cookies. The token is also returned in the response body as fallback.
+ * Set cookie with Safari-compatible format
+ * Safari (both desktop and iOS) requires exact cookie attribute ordering and format
+ * For SameSite=None cookies, Safari is extremely strict about the format
  */
 const setCookieForResponse = (
   res: Response,
@@ -20,40 +17,33 @@ const setCookieForResponse = (
   options: any,
   userAgent?: string
 ): void => {
-  const isSafariBrowser = isSafari(userAgent);
-  const isIOSDevice = isIOSSafari(userAgent);
   const isProduction = process.env.NODE_ENV === 'production';
   
-  // Safari requires special handling, especially in production with SameSite=None
-  // Also handle iOS Safari in development (may need special formatting)
-  if (isSafariBrowser && isProduction && options.sameSite === 'none') {
-    // Safari: Manually construct Set-Cookie header with proper attribute ordering
-    // Safari requires: Path -> Secure -> HttpOnly -> SameSite (in this order)
-    // Value must be URL-encoded if it contains special characters
+  // For production with SameSite=None, use manual cookie string for Safari compatibility
+  // Safari requires exact format: Path -> Max-Age -> Secure -> HttpOnly -> SameSite=None
+  if (isProduction && options.sameSite === 'none') {
+    // Manually construct Set-Cookie header with exact Safari-compatible format
+    // Safari is very strict: no extra spaces, proper encoding, exact attribute order
     const encodedValue = encodeURIComponent(value);
     const path = options.path || '/';
     const maxAge = options.maxAge ? Math.floor(options.maxAge / 1000) : undefined;
     
-    // Build cookie string with proper Safari ordering
+    // Build cookie string with exact Safari-required ordering
+    // Order: name=value; Path=path; Max-Age=seconds; Secure; HttpOnly; SameSite=None
     let cookieString = `${name}=${encodedValue}`;
     cookieString += `; Path=${path}`;
     if (maxAge) {
       cookieString += `; Max-Age=${maxAge}`;
     }
-    cookieString += '; Secure'; // Must come before SameSite for Safari
+    cookieString += '; Secure';
     if (options.httpOnly) {
       cookieString += '; HttpOnly';
     }
-    cookieString += '; SameSite=None'; // Must be last for Safari
+    cookieString += '; SameSite=None';
     
     res.setHeader('Set-Cookie', cookieString);
-  } else if (isIOSDevice && !isProduction) {
-    // iOS Safari in development: Try to set cookie with lax, but it may still fail
-    // if frontend and backend are on different ports (cross-origin)
-    // The token fallback in response body will handle authentication
-    res.cookie(name, value, options);
   } else {
-    // Other browsers or development: Use Express's res.cookie() method
+    // For development or non-SameSite=None cookies, use Express's res.cookie()
     // Express handles encoding and formatting automatically
     res.cookie(name, value, options);
   }
@@ -107,18 +97,10 @@ export const register = async (req: AuthRequest, res: Response): Promise<void> =
   const userResponse: any = user.toObject();
   delete userResponse.password;
 
-  // iOS Safari Fix: Always return token in response body for iOS devices
-  // iOS Safari (and Chrome on iOS) blocks cross-origin cookies even in development
-  // The client will use this token as fallback via Authorization header
-  const isIOSDevice = isIOSSafari(userAgent);
-  
   res.status(201).json({
     success: true,
     data: {
-      user: userResponse,
-      // Always return token for iOS devices (both development and production)
-      // iOS Safari/Chrome cannot reliably set cross-origin cookies
-      ...(isIOSDevice ? { token } : {})
+      user: userResponse
     },
     message: 'User registered successfully'
   });
@@ -171,18 +153,10 @@ export const login = async (req: AuthRequest, res: Response): Promise<void> => {
   const userResponse: any = user.toObject();
   delete userResponse.password;
 
-  // iOS Safari Fix: Always return token in response body for iOS devices
-  // iOS Safari (and Chrome on iOS) blocks cross-origin cookies even in development
-  // The client will use this token as fallback via Authorization header
-  const isIOSDevice = isIOSSafari(userAgent);
-
   res.status(200).json({
     success: true,
     data: {
-      user: userResponse,
-      // Always return token for iOS devices (both development and production)
-      // iOS Safari/Chrome cannot reliably set cross-origin cookies
-      ...(isIOSDevice ? { token } : {})
+      user: userResponse
     },
     message: 'Login successful'
   });
@@ -281,17 +255,9 @@ export const refreshToken = async (req: AuthRequest, res: Response): Promise<voi
   const cookieOptions = getCookieOptions(userAgent);
   setCookieForResponse(res, 'token', token, cookieOptions, userAgent);
 
-  // iOS Safari Fix: Always return token in response body for iOS devices
-  // iOS Safari (and Chrome on iOS) blocks cross-origin cookies even in development
-  // The client will use this token as fallback via Authorization header
-  const isIOSDevice = isIOSSafari(userAgent);
-
   res.status(200).json({
     success: true,
-    message: 'Token refreshed successfully',
-    // Always return token for iOS devices (both development and production)
-    // iOS Safari/Chrome cannot reliably set cross-origin cookies
-    ...(isIOSDevice ? { data: { token } } : {})
+    message: 'Token refreshed successfully'
   });
 };
 
@@ -300,15 +266,14 @@ export const refreshToken = async (req: AuthRequest, res: Response): Promise<voi
  */
 export const logout = async (req: AuthRequest, res: Response): Promise<void> => {
   // Clear the token cookie with proper cross-domain support
-  // Pass user agent for Safari detection
   const userAgent = req.headers['user-agent'];
   const clearCookieOptions = getClearCookieOptions(userAgent);
-  const isSafariBrowser = isSafari(userAgent);
   const isProduction = process.env.NODE_ENV === 'production';
   
-  // Safari requires special handling for clearing cookies with SameSite=None
-  if (isSafariBrowser && isProduction && clearCookieOptions.sameSite === 'none') {
+  // For production with SameSite=None, use manual cookie string for Safari compatibility
+  if (isProduction && clearCookieOptions.sameSite === 'none') {
     // Manually set cookie with empty value and immediate expiration
+    // Must match the exact format used when setting the cookie
     const cookieString = `token=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=None`;
     res.setHeader('Set-Cookie', cookieString);
   } else {

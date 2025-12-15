@@ -2,12 +2,12 @@
  * Cookie configuration utilities
  * Handles cookie settings for both development and production environments
  * 
- * iOS Safari Fix: iOS Safari has strict requirements for sameSite: 'none' cookies:
- * 1. Must have secure: true
- * 2. Must be set from HTTPS
- * 3. Cookie attributes must be in correct format
- * 4. iOS Safari may block cookies if they're considered "third-party"
- * 5. iOS Safari (especially iOS 12) treats SameSite=None as SameSite=Strict
+ * Safari Cookie Requirements (both desktop and iOS):
+ * 1. SameSite=None MUST have Secure=true
+ * 2. Must be set from HTTPS in production
+ * 3. Cookie attributes must be in exact format with proper ordering
+ * 4. No domain attribute for cross-domain cookies
+ * 5. Exact attribute order: Path -> Max-Age -> Secure -> HttpOnly -> SameSite=None
  */
 
 export interface CookieOptions {
@@ -35,8 +35,7 @@ export const isSafari = (userAgent: string | undefined): boolean => {
 };
 
 /**
- * Detect if the request is from iOS Safari (for specific iOS handling)
- * iOS Safari and Chrome on iOS both have issues with cross-origin cookies
+ * Detect if the request is from iOS Safari (kept for potential future use)
  * This function detects all iOS browsers (Safari, Chrome, Firefox, etc.)
  */
 export const isIOSSafari = (userAgent: string | undefined): boolean => {
@@ -69,32 +68,23 @@ export const isIOSSafari = (userAgent: string | undefined): boolean => {
  * For cross-domain cookies (production), uses sameSite: 'none' and secure: true
  * For same-domain cookies (development), uses sameSite: 'lax' (better Safari compatibility)
  * 
- * Safari Fix: Safari (both desktop and iOS) requires:
+ * Safari Requirements:
  * 1. SameSite=None MUST have Secure=true
- * 2. Proper attribute ordering in Set-Cookie header
+ * 2. Proper attribute ordering in Set-Cookie header (handled in setCookieForResponse)
  * 3. No domain attribute for cross-domain cookies
  * 
- * iOS Safari Fix: iOS Safari blocks cross-origin cookies even in development (different ports)
- * So we need to always return the token in the response body for iOS devices
- * 
- * @param userAgent - Optional user agent string to detect Safari
+ * @param userAgent - Optional user agent string (not currently used, kept for compatibility)
  */
 export const getCookieOptions = (userAgent?: string): CookieOptions => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const isIOSDevice = isIOSSafari(userAgent);
   
-  // iOS Safari Fix: iOS Safari blocks cross-origin cookies even in development
-  // If it's an iOS device, we'll still try to set the cookie, but the client
-  // should use the token from the response body as fallback
   let sameSite: 'strict' | 'lax' | 'none' | boolean;
   
   if (isProduction) {
     // Production: use 'none' for cross-domain (requires secure: true)
     sameSite = 'none';
   } else {
-    // Development: use 'lax' for same-origin, but iOS Safari may still block it
-    // if frontend and backend are on different ports (cross-origin)
-    // In that case, the token fallback in response body will be used
+    // Development: use 'lax' for same-origin cookies
     sameSite = 'lax';
   }
   
