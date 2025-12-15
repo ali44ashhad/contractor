@@ -1,10 +1,12 @@
 import { Response } from 'express';
 import { Report, ReportType } from '../models/Report';
 import { Project } from '../models/Project';
-import { DocumentType, Update } from '../models/Update';
+import { DocumentType, Update, UpdateType } from '../models/Update';
 import { AuthRequest } from '../middleware/auth';
 import { NotFoundError, ValidationError, ForbiddenError } from '../utils/errors';
 import { UserRole } from '../models/User';
+import { Team } from '../models/Team';
+import { Types } from 'mongoose';
 
 const flattenUpdateDocuments = (updates: any[]) =>
   updates.flatMap((updateDoc: any) =>
@@ -260,6 +262,226 @@ export const deleteReport = async (req: AuthRequest, res: Response): Promise<voi
   res.status(200).json({
     success: true,
     message: 'Report deleted successfully'
+  });
+};
+
+/**
+ * Normalize date to start of day in UTC
+ * This ensures consistent date handling regardless of server timezone
+ */
+const normalizeDate = (date: Date): Date => {
+  const normalized = new Date(date);
+  // Use UTC methods to avoid timezone issues
+  normalized.setUTCHours(0, 0, 0, 0);
+  return normalized;
+};
+
+/**
+ * Get project report with team members and updates (Admin only)
+ */
+export const getProjectReport = async (req: AuthRequest, res: Response): Promise<void> => {
+  const { projectId } = req.params;
+  const { startDate, endDate } = req.query;
+
+  if (!Types.ObjectId.isValid(projectId)) {
+    throw new ValidationError('Invalid project ID format');
+  }
+
+  // Verify project exists
+  const project = await Project.findById(projectId)
+    .populate('adminId', 'name email')
+    .populate('contractorId', 'name email role');
+
+  if (!project) {
+    throw new NotFoundError('Project');
+  }
+
+  // Validate date range
+  if (!startDate || !endDate) {
+    throw new ValidationError('Start date and end date are required');
+  }
+
+  // Parse dates as UTC to avoid timezone issues
+  // Date strings in YYYY-MM-DD format are interpreted as UTC midnight
+  const start = normalizeDate(new Date(startDate as string + 'T00:00:00.000Z'));
+  const end = normalizeDate(new Date(endDate as string + 'T00:00:00.000Z'));
+  end.setUTCHours(23, 59, 59, 999); // End of day in UTC
+
+  if (start > end) {
+    throw new ValidationError('Start date must be before or equal to end date');
+  }
+
+  // Validate dates against project dates
+  if (project.startDate) {
+    const projectStart = normalizeDate(new Date(project.startDate));
+    if (start < projectStart) {
+      throw new ValidationError(
+        `Report start date cannot be before project start date (${projectStart.toISOString().split('T')[0]})`
+      );
+    }
+  }
+
+  if (project.endDate) {
+    const projectEnd = normalizeDate(new Date(project.endDate));
+    projectEnd.setUTCHours(23, 59, 59, 999);
+    if (end > projectEnd) {
+      throw new ValidationError(
+        `Report end date cannot be after project deadline (${projectEnd.toISOString().split('T')[0]})`
+      );
+    }
+  }
+
+  // Debug logging
+  console.log('Report Query:', {
+    projectId,
+    startDate: startDate,
+    endDate: endDate,
+    normalizedStart: start.toISOString(),
+    normalizedEnd: end.toISOString()
+  });
+
+  // Get all teams for this project
+  const teams = await Team.find({ projectId: new Types.ObjectId(projectId) })
+    .populate('contractorId', 'name email role phone')
+    .populate('members', 'name email role phone')
+    .populate('createdBy', 'name email');
+
+  // Fetch all updates directly for this project in the date range
+  // Note: updateDate might be stored with time component, so we query with full day range
+  // We use $gte and $lte to ensure we capture all updates for the date range
+  const updates = await Update.find({
+    projectId: new Types.ObjectId(projectId),
+    updateDate: {
+      $gte: start,
+      $lte: end
+    }
+  })
+    .populate('projectId', 'name description')
+    .populate('contractorId', 'name email role')
+    .populate('postedBy', 'name email role')
+    .populate('documents.uploadedBy', 'name email role')
+    .sort({ updateDate: -1, timestamp: -1 });
+
+  // Get all unique members with their details
+  const memberDetailsMap = new Map<string, any>();
+  
+  // Add members from teams
+  teams.forEach(team => {
+    if (team.contractorId) {
+      const contractorId = typeof team.contractorId === 'object' && team.contractorId !== null && '_id' in team.contractorId
+        ? String((team.contractorId as any)._id)
+        : String(team.contractorId);
+      if (!memberDetailsMap.has(contractorId)) {
+        memberDetailsMap.set(contractorId, team.contractorId);
+      }
+    }
+    team.members.forEach(member => {
+      const memberId = typeof member === 'object' && member !== null && '_id' in member
+        ? String((member as any)._id)
+        : String(member);
+      if (!memberDetailsMap.has(memberId)) {
+        memberDetailsMap.set(memberId, member);
+      }
+    });
+  });
+
+  // Add project contractor if exists
+  if (project.contractorId) {
+    const contractorId = typeof project.contractorId === 'object' && project.contractorId !== null && '_id' in project.contractorId
+      ? String((project.contractorId as any)._id)
+      : String(project.contractorId);
+    if (!memberDetailsMap.has(contractorId)) {
+      memberDetailsMap.set(contractorId, project.contractorId);
+    }
+  }
+
+  // Add all users who posted updates (even if not in teams)
+  updates.forEach(update => {
+    if (update.postedBy) {
+      const postedById = typeof update.postedBy === 'object' && update.postedBy !== null && '_id' in update.postedBy
+        ? String((update.postedBy as any)._id)
+        : String(update.postedBy);
+      if (!memberDetailsMap.has(postedById)) {
+        // User details are already populated from the query
+        const userRef = typeof update.postedBy === 'object' ? update.postedBy : null;
+        if (userRef) {
+          memberDetailsMap.set(postedById, userRef);
+        }
+      }
+    }
+  });
+
+  const members = Array.from(memberDetailsMap.values());
+
+  // Group updates by date and member
+  const updatesByDate: Record<string, Record<string, { morning: any | null; evening: any | null }>> = {};
+
+  // Process updates directly
+  updates.forEach(update => {
+    // Normalize update date to UTC start of day for consistent date key
+    const updateDateNormalized = normalizeDate(update.updateDate);
+    const dateKey = updateDateNormalized.toISOString().split('T')[0];
+    const postedById = typeof update.postedBy === 'object' && update.postedBy !== null && '_id' in update.postedBy
+      ? String((update.postedBy as any)._id)
+      : String(update.postedBy);
+
+    if (!updatesByDate[dateKey]) {
+      updatesByDate[dateKey] = {};
+    }
+
+    if (!updatesByDate[dateKey][postedById]) {
+      updatesByDate[dateKey][postedById] = { morning: null, evening: null };
+    }
+
+    // Set the update based on its type (if there's already an update, keep the existing one)
+    if (update.updateType === UpdateType.MORNING) {
+      if (!updatesByDate[dateKey][postedById].morning) {
+        updatesByDate[dateKey][postedById].morning = update;
+      }
+    } else if (update.updateType === UpdateType.EVENING) {
+      if (!updatesByDate[dateKey][postedById].evening) {
+        updatesByDate[dateKey][postedById].evening = update;
+      }
+    }
+  });
+
+  // Ensure all members appear for all dates in range (with null updates if no updates)
+  const allDates: string[] = [];
+  const currentDate = new Date(start);
+  while (currentDate <= end) {
+    allDates.push(normalizeDate(new Date(currentDate)).toISOString().split('T')[0]);
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  allDates.forEach(dateKey => {
+    if (!updatesByDate[dateKey]) {
+      updatesByDate[dateKey] = {};
+    }
+    members.forEach(member => {
+      const memberId = typeof member === 'object' && member !== null && '_id' in member
+        ? String((member as any)._id)
+        : String(member);
+      if (!updatesByDate[dateKey][memberId]) {
+        updatesByDate[dateKey][memberId] = { morning: null, evening: null };
+      }
+    });
+  });
+
+  res.status(200).json({
+    success: true,
+    data: {
+      project: {
+        _id: project._id,
+        name: project.name,
+        description: project.description,
+        status: project.status,
+        adminId: project.adminId,
+        contractorId: project.contractorId
+      },
+      teams: teams,
+      members: members,
+      updatesByDate: updatesByDate
+    }
   });
 };
 

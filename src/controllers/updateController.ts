@@ -332,11 +332,12 @@ const buildDocumentsFromUploads = async (
 };
 
 /**
- * Normalize date to start of day (for comparison)
+ * Normalize date to start of day in UTC (for comparison)
+ * This ensures consistent date handling regardless of server timezone
  */
 const normalizeDate = (date: Date): Date => {
   const normalized = new Date(date);
-  normalized.setHours(0, 0, 0, 0);
+  normalized.setUTCHours(0, 0, 0, 0);
   return normalized;
 };
 
@@ -384,15 +385,21 @@ export const createUpdate = async (req: AuthRequest, res: Response): Promise<voi
   // Parse and validate update date
   let parsedUpdateDate: Date;
   if (updateDate) {
-    parsedUpdateDate = new Date(updateDate);
-  if (Number.isNaN(parsedUpdateDate.getTime())) {
-    throw new ValidationError('Update date must be a valid date');
-  }
+    // If updateDate is in YYYY-MM-DD format, parse it as UTC to avoid timezone issues
+    if (typeof updateDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(updateDate)) {
+      // Parse as UTC midnight to avoid timezone shifts
+      parsedUpdateDate = new Date(updateDate + 'T00:00:00.000Z');
+    } else {
+      parsedUpdateDate = new Date(updateDate);
+    }
+    if (Number.isNaN(parsedUpdateDate.getTime())) {
+      throw new ValidationError('Update date must be a valid date');
+    }
   } else {
     parsedUpdateDate = new Date();
   }
 
-  // Normalize date to start of day for comparison
+  // Normalize date to start of day in UTC for comparison
   const normalizedDate = normalizeDate(parsedUpdateDate);
 
   // Check if user already posted this type of update today

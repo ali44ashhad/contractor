@@ -4,7 +4,8 @@ import {
   getReportById,
   generateReport,
   updateReport,
-  deleteReport
+  deleteReport,
+  getProjectReport
 } from '../controllers/reportController';
 import { authenticate, authorize } from '../middleware/auth';
 import { UserRole } from '../models/User';
@@ -18,6 +19,13 @@ const router = Router();
  * @access  Accounts only
  */
 router.get('/', authenticate, authorize(UserRole.ACCOUNTS), asyncHandler(getAllReports));
+
+/**
+ * @route   GET /api/reports/project/:projectId
+ * @desc    Get project report with team members and updates
+ * @access  Admin only
+ */
+router.get('/project/:projectId', authenticate, authorize(UserRole.ADMIN), asyncHandler(getProjectReport));
 
 /**
  * @route   GET /api/reports/:id
