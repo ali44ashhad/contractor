@@ -34,16 +34,20 @@ export const getAllProjects = async (req: AuthRequest, res: Response): Promise<v
     filter.contractorId = req.user.id;
   }
 
-  // Members can only see projects they are enrolled in through teams
-  if (req.user?.role === UserRole.MEMBER) {
-    // Find all teams where the member is part of the members array
+  // Members, Developers, and Accounts can only see projects they are enrolled in through teams
+  if (
+    req.user?.role === UserRole.MEMBER ||
+    req.user?.role === UserRole.DEVELOPER ||
+    req.user?.role === UserRole.ACCOUNTS
+  ) {
+    // Find all teams where the user is part of the members array
     const teams = await Team.find({
       members: new Types.ObjectId(req.user.id)
     });
     const projectIds = teams.map(t => t.projectId.toString());
     
     if (projectIds.length === 0) {
-      // Member is not in any teams, return empty array with pagination
+      // User is not in any teams, return empty array with pagination
       res.status(200).json({
         success: true,
         data: [],
@@ -58,7 +62,7 @@ export const getAllProjects = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
     
-    // Filter projects to only those where the member is part of a team
+    // Filter projects to only those where the user is part of a team
     filter._id = { $in: projectIds.map(id => new Types.ObjectId(id)) };
   }
 
@@ -111,8 +115,12 @@ export const getProjectById = async (req: AuthRequest, res: Response): Promise<v
     }
   }
 
-  // Members can only see projects they are enrolled in through teams
-  if (req.user?.role === UserRole.MEMBER) {
+  // Members, Developers, and Accounts can only see projects they are enrolled in through teams
+  if (
+    req.user?.role === UserRole.MEMBER ||
+    req.user?.role === UserRole.DEVELOPER ||
+    req.user?.role === UserRole.ACCOUNTS
+  ) {
     const team = await Team.findOne({
       projectId: new Types.ObjectId(id),
       members: req.user.id
