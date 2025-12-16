@@ -36,9 +36,9 @@ router.post('/logout', authenticate, asyncHandler(logout));
 /**
  * @route   GET /api/auth/me
  * @desc    Get current user profile
- * @access  Authenticated users
+ * @access  Public (returns success: false if not authenticated)
  */
-router.get('/me', authenticate, asyncHandler(getMe));
+router.get('/me', asyncHandler(getMe));
 
 /**
  * @route   POST /api/auth/change-password

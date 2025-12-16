@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { User, UserRole, IUser } from '../models/User';
-import { generateToken } from '../utils/jwt';
+import { generateToken, extractTokenFromCookie, extractTokenFromHeader, verifyToken } from '../utils/jwt';
 import { ValidationError, UnauthorizedError } from '../utils/errors';
 import { AuthRequest } from '../middleware/auth';
 import { getCookieOptions, getClearCookieOptions, isSafari } from '../utils/cookies';
@@ -163,16 +163,68 @@ export const login = async (req: AuthRequest, res: Response): Promise<void> => {
 
 /**
  * Get current user profile
+ * Returns success: false if not authenticated (instead of 401)
+ * This prevents console errors when checking auth status on login page
  */
 export const getMe = async (req: AuthRequest, res: Response): Promise<void> => {
-  if (!req.user) {
-    throw new UnauthorizedError('Authentication required');
+  // Try to extract token from cookie first (preferred method)
+  let token = extractTokenFromCookie(req.cookies?.token);
+  
+  // Fallback to Authorization header for backward compatibility
+  if (!token) {
+    const authHeader = req.headers.authorization;
+    token = extractTokenFromHeader(authHeader);
   }
 
-  const user = await User.findById(req.user.id).select('-password');
+  // If no token, return success: false (not an error)
+  if (!token) {
+    return res.status(200).json({
+      success: false,
+      error: {
+        message: 'Not authenticated',
+        statusCode: 401
+      }
+    });
+  }
+
+  // Verify token
+  let decoded;
+  try {
+    decoded = verifyToken(token);
+  } catch (error: any) {
+    // Token invalid or expired - return success: false
+    return res.status(200).json({
+      success: false,
+      error: {
+        message: error.message === 'Token has expired' 
+          ? 'Token has expired. Please login again'
+          : 'Invalid token. Please provide a valid authentication token',
+        statusCode: 401
+      }
+    });
+  }
+
+  // Verify user exists and is active
+  const user = await User.findById(decoded.id).select('-password');
 
   if (!user) {
-    throw new UnauthorizedError('User not found');
+    return res.status(200).json({
+      success: false,
+      error: {
+        message: 'User not found',
+        statusCode: 401
+      }
+    });
+  }
+
+  if (!user.isActive) {
+    return res.status(200).json({
+      success: false,
+      error: {
+        message: 'User account is inactive. Please contact administrator',
+        statusCode: 401
+      }
+    });
   }
 
   res.status(200).json({

@@ -331,15 +331,6 @@ export const getProjectReport = async (req: AuthRequest, res: Response): Promise
     }
   }
 
-  // Debug logging
-  console.log('Report Query:', {
-    projectId,
-    startDate: startDate,
-    endDate: endDate,
-    normalizedStart: start.toISOString(),
-    normalizedEnd: end.toISOString()
-  });
-
   // Get all teams for this project
   const teams = await Team.find({ projectId: new Types.ObjectId(projectId) })
     .populate('contractorId', 'name email role phone')
