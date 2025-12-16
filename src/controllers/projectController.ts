@@ -36,8 +36,9 @@ export const getAllProjects = async (req: AuthRequest, res: Response): Promise<v
 
   // Members can only see projects they are enrolled in through teams
   if (req.user?.role === UserRole.MEMBER) {
+    // Find all teams where the member is part of the members array
     const teams = await Team.find({
-      members: req.user.id
+      members: new Types.ObjectId(req.user.id)
     });
     const projectIds = teams.map(t => t.projectId.toString());
     
@@ -57,6 +58,7 @@ export const getAllProjects = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
     
+    // Filter projects to only those where the member is part of a team
     filter._id = { $in: projectIds.map(id => new Types.ObjectId(id)) };
   }
 

@@ -62,6 +62,11 @@ export const register = async (req: AuthRequest, res: Response): Promise<void> =
     throw new ValidationError('Password must be at least 6 characters long');
   }
 
+  // Prevent admin role registration through public registration
+  if (role === UserRole.ADMIN) {
+    throw new ValidationError('Admin role cannot be assigned during registration');
+  }
+
   // Check if user already exists
   const existingUser = await User.findOne({ email: email.toLowerCase() });
   if (existingUser) {
